@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from azure.storage.blob import BlobServiceClient
 
-from config.settings import STORAGE_CONTAINER_NAME
+from config.settings import STORAGE_CONTAINER_NAME, QUEUE_CONN_STR, QUEUE_OUTPUT_NAME 
 
 from src.domain import CameraParameters
 from src.domain.granulometry.models import RosinRammler
@@ -18,6 +18,8 @@ from src.nodes.granulometry import (FixedDistanceTransformer,
                                     GranulometryModelNode, GranulometryStatsNode)
 from src.nodes.ia import OnnxInferenceNode, OnnxPostProcessingNode
 from src.nodes.viz import ResultVisualizerNode
+from src.nodes.azure_results import ServiceBusSenderNode
+
 
 
 class GranulometryPipeline:
@@ -93,6 +95,7 @@ class GranulometryPipeline:
             ),
             # 7. Generar visualizaciones de los resultados.
             ResultVisualizerNode(name="Visualization"),
+            
             # 8. Subir los artefactos resultantes (imágenes, JSON) a Blob Storage.
             BlobStorageUploaderNode(
                 blob_service_client=self.blob_service_client,
@@ -100,6 +103,12 @@ class GranulometryPipeline:
                 img_format="png",
                 dpi=300,
                 name="Uploader"
+            ),
+
+            #9 Resultados a la cola de resultados
+            ServiceBusSenderNode(
+                 connection_string=QUEUE_CONN_STR, 
+                 queue_name=QUEUE_OUTPUT_NAME 
             )
         ]
 
