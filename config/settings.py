@@ -13,3 +13,5 @@ QUEUE_OUTPUT_NAME = os.getenv("queue_output_name")
 FOCAL_LENGTH = os.getenv("focal_length")
 SENSOR_WIDTH = os.getenv("sensor_width")
 SENSOR_HEIGHT = os.getenv("sensor_height")
+
+PATH_MODEL = os.getenv("path_model")

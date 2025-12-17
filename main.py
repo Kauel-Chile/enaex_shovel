@@ -4,7 +4,7 @@ import sys
 
 from azure.storage.blob import BlobServiceClient
 
-from config.settings import STORAGE_CONN_STR, QUEUE_CONN_STR, QUEUE_INPUT_NAME
+from config.settings import STORAGE_CONN_STR, QUEUE_CONN_STR, QUEUE_INPUT_NAME, PATH_MODEL
 from src.utils import load_model, load_camera_params
 from src.worker import Worker
 
@@ -31,7 +31,7 @@ if __name__ == "__main__":
 
     worker = None
     try:
-        model = load_model("weights/kenaex_drone_f32_v5_1024.onnx")
+        model = load_model(PATH_MODEL)
         camera_params = load_camera_params()
         blob_service_client = BlobServiceClient.from_connection_string(STORAGE_CONN_STR)
         
