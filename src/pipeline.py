@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from azure.storage.blob import BlobServiceClient
 
-from config.settings import STORAGE_CONTAINER_NAME, QUEUE_CONN_STR, QUEUE_OUTPUT_NAME 
+from config.settings import STORAGE_CONTAINER_NAME_INPUT, STORAGE_CONTAINER_NAME_RESULT, QUEUE_CONN_STR, QUEUE_OUTPUT_NAME 
 
 from src.domain import CameraParameters
 from src.domain.granulometry.models import RosinRammler
@@ -68,7 +68,7 @@ class GranulometryPipeline:
             # 1. Descargar la imagen desde Azure Blob Storage.
             BlobStorageDownloaderNode(
                 blob_service_client=self.blob_service_client,
-                container_name=STORAGE_CONTAINER_NAME,
+                container_name=STORAGE_CONTAINER_NAME_INPUT,
                 name="Downloader"
             ),
             # 2. Ejecutar la inferencia con el modelo ONNX para segmentar la imagen.
@@ -99,7 +99,7 @@ class GranulometryPipeline:
             # 8. Subir los artefactos resultantes (imágenes, JSON) a Blob Storage.
             BlobStorageUploaderNode(
                 blob_service_client=self.blob_service_client,
-                container_name=STORAGE_CONTAINER_NAME,
+                container_name=STORAGE_CONTAINER_NAME_RESULT,
                 img_format="png",
                 dpi=300,
                 name="Uploader"

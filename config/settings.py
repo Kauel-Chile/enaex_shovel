@@ -4,7 +4,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 STORAGE_CONN_STR = os.getenv("storage_account_conn_str")
-STORAGE_CONTAINER_NAME = os.getenv("storage_container_name")  
+STORAGE_CONTAINER_NAME_INPUT = os.getenv("storage_container_name_input")  
+STORAGE_CONTAINER_NAME_RESULT = os.getenv("storage_container_name_result")  
 
 QUEUE_CONN_STR = os.getenv("service_bus_conn_str")
 QUEUE_INPUT_NAME = os.getenv("queue_input_name")
