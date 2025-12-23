@@ -1,7 +1,6 @@
 .git
 .venv
 __pycache__
-.env
 .env_bck
 .env_example
 zz_*.py

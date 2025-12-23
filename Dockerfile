@@ -12,6 +12,12 @@ ENV PYTHONUNBUFFERED=1 \
 # Definimos el directorio de trabajo
 WORKDIR /app
 
+# Instalar dependencias del sistema necesarias para OpenCV
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # --- CAPA DE DEPENDENCIAS (Para aprovechar caché) ---
 
 # Copiamos solo los archivos de configuración de dependencias primero
