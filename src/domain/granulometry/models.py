@@ -55,7 +55,6 @@ class RosinRammler:
         x_max = float(bin_centers.max())
         x_50 = float(np.median(bin_centers)) # Nota: Esto es mediana del eje X, no D50 real.
         
-        # Cálculo de 'b' específico de tu lógica de negocio original
         # b = m * (2 * ln(2) * ln(x_max / x_50))
         # Protegemos x_50 para no dividir por cero
         safe_x50 = x_50 if x_50 > 1e-6 else 1.0

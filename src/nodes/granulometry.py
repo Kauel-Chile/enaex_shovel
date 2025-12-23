@@ -6,15 +6,12 @@ unidades físicas, el cálculo estadístico de la distribución de tamaños y el
 ajuste de modelos matemáticos.
 """
 import logging
-from typing import Any, Dict, List
-
 import numpy as np
-
+from typing import Any, Dict, List
 from src.domain import (CameraParameters, GranulometryCurveData,
                         GranulometryResult, HistogramBin, Rock)
 
 from .base import PipelineNode
-
 
 class FixedDistanceTransformer(PipelineNode):
     """
@@ -147,11 +144,9 @@ class GranulometryStatsNode(PipelineNode):
         total_rock_area = np.sum(areas)
         retained_pct = areas_per_bin / total_rock_area if total_rock_area > 0 else np.zeros(self.nbins)
         
-        # El % pasante es 1 - % retenido acumulado. Pero es más fácil
-        # calcular el retenido acumulado y luego la curva pasante.
-        passing_pct_curve = 1.0 - np.cumsum(retained_pct)
-        # Aseguramos que la curva esté en el rango correcto y tenga la forma adecuada.
-        passing_pct_curve = np.insert(passing_pct_curve[:-1], 0, 1.0)
+        # El % pasante es la suma acumulada (si los bins están ordenados de menor a mayor).
+        # Esto genera una curva creciente (0 -> 1) necesaria para np.interp y Rosin-Rammler.
+        passing_pct_curve = np.cumsum(retained_pct)
 
         # Cálculo de P-Values (e.g., P80 es el tamaño por donde pasa el 80%)
         p_vals_dict = {
