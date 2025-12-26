@@ -1,8 +1,10 @@
 import json
 import logging
 import dataclasses
+import numpy as np 
+
+from datetime import datetime
 from typing import Any, Dict
-import numpy as np  # Necesario si tus cálculos vienen de OpenCV/Pandas
 
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from src.nodes.base import PipelineNode
@@ -71,12 +73,12 @@ class ServiceBusSenderNode(PipelineNode):
         else:
             # Si por alguna razón ya era un dict o es None
             result_dict = raw_result
-
         # Estructura final del mensaje
         payload = {
             "id": context.get("job_id"),
-            "url": context.get("image_url"),
-            "timestamp": str(context.get("timestamp", "")), # Ejemplo de metadata extra
+            "url_raw": context.get("image_url"),
+            "url_result": context.get("uploaded_url"),   
+            "timestamp": str(str(datetime.now())), # Ejemplo de metadata extra
             "granulometry": result_dict
         }
 
@@ -84,6 +86,8 @@ class ServiceBusSenderNode(PipelineNode):
             # --- 3. Serializar a JSON ---
             # El parámetro 'default' se encarga de limpiar los tipos NumPy dentro del dict
             message_body = json.dumps(payload, default=self._json_serializer_helper)
+            
+            print(message_body)
 
             # --- 4. Enviar a Azure ---
             client = ServiceBusClient.from_connection_string(self.connection_string)
