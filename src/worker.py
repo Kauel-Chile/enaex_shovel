@@ -127,8 +127,8 @@ class Worker:
         self.logger.info("\n".join(log_msg))
 
     def _get_distance_lidar(self, job_data: dict) -> float:
-        l1 = job_data.get("l1")
-        l2 = job_data.get("l2")
+        l1 = job_data.get("L1")
+        l2 = job_data.get("L2")
         
         # Asegurar que sean diccionarios
         if not isinstance(l1, dict): l1 = {}
