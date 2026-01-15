@@ -88,6 +88,9 @@ class Worker:
 
             lidar_distance = self._get_distance_lidar(job_data)
             
+            self.logger.info(f"data raw: {job_data}")
+            self.logger.info(f"📐 Distancia LIDAR calculada: {lidar_distance:.2f} unidades.")
+
             context = {
                 "job_id": job_id,
                 "image_url": image_url,
