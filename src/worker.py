@@ -1,6 +1,7 @@
 import gc
 import json
 import statistics
+import ast
 import logging
 from azure.servicebus import ServiceBusClient, ServiceBusReceiver
 from src.pipeline import GranulometryPipeline
@@ -130,12 +131,23 @@ class Worker:
         self.logger.info("\n".join(log_msg))
 
     def _get_distance_lidar(self, job_data: dict) -> float:
-        l1 = job_data.get("L1")
-        l2 = job_data.get("L2")
+        # 1. Usar minúsculas para coincidir con el JSON 'l1' y 'l2'
+        l1_raw = job_data.get("l1")
+        l2_raw = job_data.get("l2")
         
-        # Asegurar que sean diccionarios
-        if not isinstance(l1, dict): l1 = {}
-        if not isinstance(l2, dict): l2 = {}
+        def parse_to_dict(val):
+            if isinstance(val, dict):
+                return val
+            if isinstance(val, str):
+                try:
+                    # Convierte el string "{'a': 1}" en un dict real
+                    return ast.literal_eval(val)
+                except (ValueError, SyntaxError):
+                    return {}
+            return {}
+
+        l1 = parse_to_dict(l1_raw)
+        l2 = parse_to_dict(l2_raw)
 
         all_values = list(l1.values()) + list(l2.values())
         if not all_values:
