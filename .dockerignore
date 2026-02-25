@@ -4,6 +4,7 @@ __pycache__
 .env_bck
 .env_example
 zz_*.py
-weights/*.tmp  # Opcional: ajusta según si quieres las pesas en la imagen o no
+weights/*.tmp  
 
 results/
+manual_script/

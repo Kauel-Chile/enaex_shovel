@@ -176,3 +176,5 @@ pyrightconfig.json
 .env*
 zz_*
 results/
+manual_script/images/*
+manual_script/images/*
