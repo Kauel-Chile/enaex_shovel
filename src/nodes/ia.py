@@ -13,6 +13,26 @@ from typing import Any, Dict
 
 from .base import PipelineNode
 
+"HOT FIX"
+def hot_fix_2160_square_center_cut(image, context):
+    h, w = context['original_shape']
+    target_size = 2160
+
+    start_x = (w - target_size) // 2
+    start_y = (h - target_size) // 2
+    
+    end_x = start_x + target_size
+    end_y = start_y + target_size
+
+    if image.ndim == 3:
+        # Formato CHW (Común en modelos de IA)
+        image_fixed = image[:, start_y:end_y, start_x:end_x]
+    else:
+        # Formato HWC (Común en OpenCV/PIL)
+        image_fixed = image[start_y:end_y, start_x:end_x, :]
+
+    return image_fixed
+
 
 class OnnxInferenceNode(PipelineNode):
     """
@@ -50,8 +70,13 @@ class OnnxInferenceNode(PipelineNode):
         if image is None:
             raise ValueError(f"[{self.name}] 'image' no encontrada en el contexto.")
 
-        original_h, original_w = image.shape[:2]
-        context['original_shape'] = (original_w, original_h)
+        # original_h, original_w = image.shape[:2]
+        # context['original_shape'] = (original_w, original_h)
+        
+        """HOT FIX START"""
+        image = hot_fix_2160_square_center_cut(image, context)
+        context['original_shape'] = (image.shape[1], image.shape[0])
+        """HOT FIX END"""
 
         logging.info("[%s] Pre-procesando imagen...", self.name)
         img_input = self.__preprocessing(image)
@@ -123,7 +148,7 @@ class OnnxPostProcessingNode(PipelineNode):
         prob_centers = self.__smooth_channel(prob_centers)
 
         # 2. Crear máscaras binarias a partir de umbrales.
-        mask_stones_area = prob_stones >= 0.5
+        mask_stones_area = prob_stones >= 0.75
         centers_bin = np.logical_and(prob_centers >= 0.1, prob_edges < 0.25)
         edges_bin = prob_edges >= 0.25
 

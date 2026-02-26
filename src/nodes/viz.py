@@ -51,28 +51,30 @@ class ResultVisualizerNode(PipelineNode):
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Crea una figura de Matplotlib con los resultados del análisis.
-
-        Context Inputs:
-            - `image` (np.ndarray): La imagen original para usar como fondo.
-            - `rocks` (List[Rock]): Lista de objetos Rock detectados.
-            - `mask_bg` (np.ndarray): Máscara binaria que representa el material fino.
-            - `granulometry_result` (GranulometryResult): Objeto con los resultados
-              estadísticos, incluyendo los P-values para la categorización.
-
-        Context Outputs:
-            - `output_figure` (matplotlib.figure.Figure): La figura generada,
-              lista para ser guardada o subida.
         """
         logging.info("[%s] Iniciando generación de la visualización...", self.name)
-        img = context.get('image')
+        
+        # Intentamos obtener la imagen original si existe; de lo contrario, usamos 'image'
+        img = context.get('original_image', context.get('image'))
         rocks = context.get('rocks', [])
         mask_bg = context.get('mask_bg')
         granulometry_result = context.get('granulometry_result')
 
         if img is None:
             raise ValueError(f"[{self.name}] No se encontró 'image' en el contexto.")
-
+        
         h, w = img.shape[:2]
+
+        # --- INICIO HOT FIX 2160 CENTER CUT ---
+        target_size = 2160
+        
+        # Calculamos el offset de forma independiente asegurando que no sea negativo.
+        # Esto soluciona el problema cuando una dimensión ya es menor o igual a 2160.
+        offset_x = max(0, (w - target_size) // 2)
+        offset_y = max(0, (h - target_size) // 2)
+        
+        logging.info("[%s] Aplicando offset del Hot Fix: X=%d, Y=%d", self.name, offset_x, offset_y)
+        # --- FIN HOT FIX ---
 
         # Prioriza los P-values del modelo ajustado; si no existen, usa los de la curva real.
         p_vals = {}
@@ -93,8 +95,17 @@ class ResultVisualizerNode(PipelineNode):
 
         # Dibuja la máscara de material fino.
         if mask_bg is not None:
+            # Creamos un lienzo vacío del tamaño de la imagen original (4K, por ejemplo)
             mask_rgba = np.zeros((h, w, 4))
-            mask_rgba[mask_bg > 0] = to_rgba(self.COLORS["FINE"], alpha=self.fill_alpha)
+            h_crop, w_crop = mask_bg.shape[:2]
+            
+            # Seleccionamos la región de interés (ROI) correspondiente al recorte central
+            roi = mask_rgba[offset_y:offset_y+h_crop, offset_x:offset_x+w_crop]
+            
+            # Aplicamos el color sobre la ROI usando la máscara binaria pequeña
+            roi[mask_bg > 0] = to_rgba(self.COLORS["FINE"], alpha=self.fill_alpha)
+            
+            # Mostramos la máscara completa (transparente donde no hay material fino)
             ax.imshow(mask_rgba)
 
         # Itera sobre cada roca para dibujarla, coloreada según su tamaño.
@@ -107,9 +118,16 @@ class ResultVisualizerNode(PipelineNode):
             
             base_color = self.COLORS[color_key]
             
-            # Dibuja el relleno y el contorno del polígono de la roca.
-            ax.fill(*rock.contorno.exterior.xy, color=to_rgba(base_color, alpha=self.fill_alpha))
-            ax.plot(*rock.contorno.exterior.xy, color=base_color, linewidth=self.contour_width)
+            # Obtenemos las coordenadas de la roca
+            x_coords, y_coords = rock.contorno.exterior.xy
+            
+            # HOT FIX: Desplazamos las coordenadas sumando el offset
+            x_coords = np.array(x_coords) + offset_x
+            y_coords = np.array(y_coords) + offset_y
+            
+            # Dibuja el relleno y el contorno del polígono de la roca desplazado
+            ax.fill(x_coords, y_coords, color=to_rgba(base_color, alpha=self.fill_alpha))
+            ax.plot(x_coords, y_coords, color=base_color, linewidth=self.contour_width)
 
         # Configuración de la leyenda y apariencia del gráfico.
         legend_elements = [
@@ -129,7 +147,7 @@ class ResultVisualizerNode(PipelineNode):
         
         plt.tight_layout()
 
-        # Guarda la figura en el contexto para que el siguiente nodo (uploader) pueda usarla.
+        # Guarda la figura en el contexto
         context['output_figure'] = fig
         logging.info("[%s] Visualización generada y añadida al contexto.", self.name)
         
