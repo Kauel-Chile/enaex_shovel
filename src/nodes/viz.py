@@ -1,9 +1,3 @@
-"""
-Nodo del pipeline para la visualización de resultados.
-
-Este módulo contiene el nodo responsable de generar una representación gráfica
-de los resultados del análisis de granulometría.
-"""
 import logging
 from typing import Any, Dict
 
@@ -63,17 +57,21 @@ class ResultVisualizerNode(PipelineNode):
         if img is None:
             raise ValueError(f"[{self.name}] No se encontró 'image' en el contexto.")
         
-        h, w = img.shape[:2]
+        h_orig, w_orig = img.shape[:2]
 
         # --- INICIO HOT FIX 2160 CENTER CUT ---
         target_size = 2160
         
         # Calculamos el offset de forma independiente asegurando que no sea negativo.
-        # Esto soluciona el problema cuando una dimensión ya es menor o igual a 2160.
-        offset_x = max(0, (w - target_size) // 2)
-        offset_y = max(0, (h - target_size) // 2)
+        offset_x = max(0, (w_orig - target_size) // 2)
+        offset_y = max(0, (h_orig - target_size) // 2)
         
-        logging.info("[%s] Aplicando offset del Hot Fix: X=%d, Y=%d", self.name, offset_x, offset_y)
+        # Recortamos la imagen al cuadrado central
+        img = img[offset_y:offset_y+target_size, offset_x:offset_x+target_size]
+        h, w = img.shape[:2] # Actualizamos a las dimensiones de la imagen recortada
+        
+        logging.info("[%s] Hotfix: Imagen recortada a %dx%d (offset original X=%d, Y=%d)", 
+                     self.name, w, h, offset_x, offset_y)
         # --- FIN HOT FIX ---
 
         # Prioriza los P-values del modelo ajustado; si no existen, usa los de la curva real.
@@ -95,17 +93,17 @@ class ResultVisualizerNode(PipelineNode):
 
         # Dibuja la máscara de material fino.
         if mask_bg is not None:
-            # Creamos un lienzo vacío del tamaño de la imagen original (4K, por ejemplo)
+            # Ahora la imagen base (img) ya está recortada, y mask_bg coincide con este recorte
             mask_rgba = np.zeros((h, w, 4))
             h_crop, w_crop = mask_bg.shape[:2]
             
-            # Seleccionamos la región de interés (ROI) correspondiente al recorte central
-            roi = mask_rgba[offset_y:offset_y+h_crop, offset_x:offset_x+w_crop]
+            # Por seguridad (en caso de pequeñas variaciones), tomamos los mínimos
+            h_crop = min(h, h_crop)
+            w_crop = min(w, w_crop)
             
-            # Aplicamos el color sobre la ROI usando la máscara binaria pequeña
-            roi[mask_bg > 0] = to_rgba(self.COLORS["FINE"], alpha=self.fill_alpha)
+            # Aplicamos el color sobre la máscara binaria
+            mask_rgba[:h_crop, :w_crop][mask_bg[:h_crop, :w_crop] > 0] = to_rgba(self.COLORS["FINE"], alpha=self.fill_alpha)
             
-            # Mostramos la máscara completa (transparente donde no hay material fino)
             ax.imshow(mask_rgba)
 
         # Itera sobre cada roca para dibujarla, coloreada según su tamaño.
@@ -121,11 +119,9 @@ class ResultVisualizerNode(PipelineNode):
             # Obtenemos las coordenadas de la roca
             x_coords, y_coords = rock.contorno.exterior.xy
             
-            # HOT FIX: Desplazamos las coordenadas sumando el offset
-            x_coords = np.array(x_coords) + offset_x
-            y_coords = np.array(y_coords) + offset_y
+            # Como la imagen ya está recortada, NO es necesario sumar offset_x y offset_y
             
-            # Dibuja el relleno y el contorno del polígono de la roca desplazado
+            # Dibuja el relleno y el contorno del polígono de la roca
             ax.fill(x_coords, y_coords, color=to_rgba(base_color, alpha=self.fill_alpha))
             ax.plot(x_coords, y_coords, color=base_color, linewidth=self.contour_width)
 
