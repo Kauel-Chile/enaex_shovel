@@ -1,206 +1,165 @@
-"""
-Nodos del pipeline responsables de la ejecución de la inferencia del modelo de
-Machine Learning y el post-procesamiento de sus resultados.
-"""
 import logging
-
 import cv2
 import numpy as np
 import onnxruntime as ort
 from shapely.geometry import Polygon
 from skimage.segmentation import watershed
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from .base import PipelineNode
 
-"HOT FIX"
-def hot_fix_2160_square_center_cut(image, context):
-    h, w = context['original_shape']
-    target_size = 2160
-
-    start_x = (w - target_size) // 2
-    start_y = (h - target_size) // 2
+def get_valid_inference_size(shape: tuple, depth: int = 7) -> tuple:
+    """
+    Calcula las dimensiones (W, H) más cercanas que son divisibles por 2^depth.
+    Esto es crítico para modelos con arquitectura U-Net o Encoder-Decoder.
+    """
+    divisor = 2 ** depth
+    h, w = shape[:2]
+    new_w = (w // divisor) * divisor
+    new_h = (h // divisor) * divisor
     
-    end_x = start_x + target_size
-    end_y = start_y + target_size
-
-    if image.ndim == 3:
-        # Formato CHW (Común en modelos de IA)
-        image_fixed = image[:, start_y:end_y, start_x:end_x]
-    else:
-        # Formato HWC (Común en OpenCV/PIL)
-        image_fixed = image[start_y:end_y, start_x:end_x, :]
-
-    return image_fixed
+    # Aseguramos un tamaño mínimo de un bloque
+    return max(new_w, divisor), max(new_h, divisor)
 
 
 class OnnxInferenceNode(PipelineNode):
     """
-    Ejecuta la inferencia de un modelo ONNX sobre una imagen de entrada.
+    Ejecuta la inferencia de un modelo ONNX adaptando la imagen a dimensiones
+    compatibles con la profundidad del modelo (múltiplos de 128).
     """
-    def __init__(
-        self,
-        onnx_session: ort.InferenceSession,
-        name: str = "inference_node"
-    ):
-        """
-        Inicializa el nodo de inferencia.
-
-        Args:
-            onnx_session (ort.InferenceSession): Sesión de ONNX Runtime ya
-                cargada e inicializada.
-            name (str): Nombre del nodo.
-        """
+    def __init__(self, onnx_session: ort.InferenceSession, name: str = "inference_node"):
         super().__init__(name)
         self.session = onnx_session
         self.input_name = self.session.get_inputs()[0].name
 
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Realiza el pre-procesamiento, ejecuta el modelo y guarda las salidas en el contexto.
-
-        Context Inputs:
-            - `image` (np.ndarray): La imagen de entrada a procesar.
-
-        Context Outputs:
-            - `raw_outputs` (tuple): Una tupla con los arrays de salida crudos del modelo.
-            - `original_shape` (tuple): La forma (ancho, alto) de la imagen original.
-        """
         image = context.get('image')
         if image is None:
             raise ValueError(f"[{self.name}] 'image' no encontrada en el contexto.")
 
-        # original_h, original_w = image.shape[:2]
-        # context['original_shape'] = (original_w, original_h)
+        # 1. Guardar dimensiones originales (H, W)
+        orig_h, orig_w = image.shape[:2]
+        context['original_shape'] = (orig_w, orig_h)
+
+        # 2. Calcular tamaño óptimo (múltiplo de 128)
+        target_w, target_h = get_valid_inference_size(image.shape, depth=7)
+        context['inference_shape'] = (target_w, target_h)
+
+        logging.info("[%s] Redimensionando de %dx%d a %dx%d para inferencia...", 
+                     self.name, orig_w, orig_h, target_w, target_h)
         
-        """HOT FIX START"""
-        image = hot_fix_2160_square_center_cut(image, context)
-        context['original_shape'] = (image.shape[1], image.shape[0])
-        """HOT FIX END"""
+        # 3. Pre-procesamiento
+        img_input = self.__preprocessing(image, (target_w, target_h))
 
-        logging.info("[%s] Pre-procesando imagen...", self.name)
-        img_input = self.__preprocessing(image)
-
+        # 4. Inferencia
         logging.info("[%s] Ejecutando inferencia ONNX...", self.name)
         outputs_raw = self.__inference(img_input)
         
         context['raw_outputs'] = outputs_raw
-        logging.info("[%s] Inferencia completada.", self.name)
         return context
 
-    def __preprocessing(self, image: np.ndarray) -> np.ndarray:
-        """Prepara la imagen para el formato que espera el modelo ONNX."""
-        # Redimensiona a 1024x1024, normaliza y añade una dimensión de batch.
-        img = cv2.resize(image, (1024, 1024)).astype(np.float32)
+    def __preprocessing(self, image: np.ndarray, target_size: tuple) -> np.ndarray:
+        """Redimensiona, normaliza y ajusta dimensiones para el modelo."""
+        # target_size es (W, H) para OpenCV
+        img = cv2.resize(image, target_size, interpolation=cv2.INTER_LINEAR).astype(np.float32)
         img /= 255.0
+        # El modelo espera [Batch, H, W, C]
         return img[None, ...]
 
     def __inference(self, image: np.ndarray) -> tuple:
-        """Ejecuta la sesión de inferencia de ONNX."""
         return tuple(self.session.run(None, {self.input_name: image}))
 
 
 class OnnxPostProcessingNode(PipelineNode):
     """
-    Post-procesa las salidas crudas de un modelo de segmentación para extraer
-    polígonos de objetos.
+    Post-procesa las salidas del modelo escalando los resultados de vuelta
+    a la resolución original del usuario.
     """
     def __init__(self, name: str = "postproc_node"):
         super().__init__(name)
 
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Toma las salidas del modelo y las convierte en polígonos geométricos.
-
-        Context Inputs:
-            - `raw_outputs` (tuple): Salidas crudas del `OnnxInferenceNode`.
-            - `original_shape` (tuple): Forma (ancho, alto) de la imagen original.
-
-        Context Outputs:
-            - `polygons` (List[Polygon]): Lista de polígonos de Shapely, cada
-              uno representando una partícula detectada.
-            - `mask_fine` (np.ndarray): Máscara binaria del material fino.
-            - `mask_bg` (np.ndarray): Máscara binaria del fondo.
-        """
         outputs = context.get('raw_outputs')
-        original_shape = context.get('original_shape')
+        orig_size = context.get('original_shape')      # (W, H)
+        inf_size = context.get('inference_shape')     # (W, H)
 
-        if outputs is None or original_shape is None:
-            raise ValueError(f"[{self.name}] Faltan 'raw_outputs' u 'original_shape' en el contexto.")
+        if any(v is None for v in [outputs, orig_size, inf_size]):
+            raise ValueError(f"[{self.name}] Faltan datos críticos en el contexto.")
 
-        logging.info("[%s] Iniciando post-procesamiento de salidas del modelo...", self.name)
-        polygons, mask_fine, mask_bg = self.__process_logic(outputs, target_size=original_shape)
+        logging.info("[%s] Iniciando post-procesamiento...", self.name)
+        
+        polygons, mask_fine, mask_bg = self.__process_logic(
+            outputs, 
+            target_size=orig_size, 
+            inference_size=inf_size
+        )
 
         context['polygons'] = polygons
         context['mask_fine'] = mask_fine
         context['mask_bg'] = mask_bg
-        logging.info("[%s] Post-procesamiento finalizado. Se extrajeron %d polígonos.", self.name, len(polygons))
         
+        logging.info("[%s] Finalizado. %d polígonos extraídos.", self.name, len(polygons))
         return context
 
-    def __process_logic(self, outputs: tuple, target_size: tuple) -> tuple:
-        """Contiene la lógica de visión computacional para segmentar las partículas."""
-        # 1. Desempaquetar y preparar canales de probabilidad del modelo.
+    def __process_logic(self, outputs: tuple, target_size: tuple, inference_size: tuple) -> tuple:
+        # 1. Desempaquetar (Asumiendo salida del modelo con la forma de la inferencia)
         o_class, o_ncs = outputs[0][0], outputs[1][0]
-        prob_fine, prob_stones = o_class[..., 0], o_class[..., 1]
-        prob_centers, prob_edges = o_ncs[..., 1], self.__remap(o_ncs[..., 2])
-        prob_stones = self.__smooth_channel(prob_stones)
-        prob_centers = self.__smooth_channel(prob_centers)
+        
+        prob_fine = o_class[..., 0]
+        prob_stones = self.__smooth_channel(o_class[..., 1])
+        prob_centers = self.__smooth_channel(o_ncs[..., 1])
+        prob_edges = self.__remap(o_ncs[..., 2])
 
-        # 2. Crear máscaras binarias a partir de umbrales.
+        # 2. Umbrales binarios
         mask_stones_area = prob_stones >= 0.75
         centers_bin = np.logical_and(prob_centers >= 0.1, prob_edges < 0.25)
         edges_bin = prob_edges >= 0.25
 
-        # 3. Aplicar Watershed para separar instancias de rocas que se tocan.
+        # 3. Watershed (Segmentación de instancias)
         labels = self.__apply_watershed(centers_bin, edges_bin, mask=mask_stones_area)
 
-        # 4. Extraer contornos de las etiquetas y convertirlos a polígonos.
-        polygons = self.__extract_polygons(labels, target_size)
+        # 4. Extraer polígonos escalando de inference_size -> target_size
+        polygons = self.__extract_polygons(labels, target_size, inference_size)
 
-        # 5. Crear máscaras finales y redimensionarlas al tamaño original.
+        # 5. Máscaras de material fino y fondo
         mask_fine_raw = prob_fine * np.logical_not(edges_bin)
         mask_fine = (mask_fine_raw > 0.78).astype(np.uint8) * 255
         mask_bg = (prob_fine > 0.78).astype(np.uint8) * 255
 
-        if target_size != (1024, 1024):
-            mask_fine = cv2.resize(mask_fine, target_size, interpolation=cv2.INTER_AREA)
-            mask_bg = cv2.resize(mask_bg, target_size, interpolation=cv2.INTER_AREA)
+        # Redimensionar máscaras a tamaño original
+        mask_fine = cv2.resize(mask_fine, target_size, interpolation=cv2.INTER_AREA)
+        mask_bg = cv2.resize(mask_bg, target_size, interpolation=cv2.INTER_AREA)
 
         return polygons, mask_fine, mask_bg
 
     def __remap(self, x: np.ndarray) -> np.ndarray:
-        """Normaliza un array a un rango de [0, 1]."""
-        min_val, max_val = x.min(), x.max()
-        diff = max_val - min_val
-        return np.zeros_like(x) if diff < 1e-6 else (x - min_val) / diff
+        diff = x.max() - x.min()
+        return np.zeros_like(x) if diff < 1e-6 else (x - x.min()) / diff
 
     def __smooth_channel(self, channel: np.ndarray) -> np.ndarray:
-        """Aplica un remapeo y un suavizado de caja."""
-        x = self.__remap(channel)
-        return cv2.blur(x, (3, 3))
+        return cv2.blur(self.__remap(channel), (3, 3))
 
     def __apply_watershed(self, centers_bin, edges_bin, mask) -> np.ndarray:
-        """Ejecuta el algoritmo Watershed para la segmentación de instancias."""
         centers_u8 = (centers_bin.astype(np.uint8) * 255)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
         centers_u8 = cv2.morphologyEx(centers_u8, cv2.MORPH_CLOSE, kernel)
-        _, markers = cv2.connectedComponents(centers_u8)
         
+        _, markers = cv2.connectedComponents(centers_u8)
         edges_inv_u8 = ((~edges_bin).astype(np.uint8) * 255)
         dist_transform = cv2.distanceTransform(edges_inv_u8, cv2.DIST_LABEL_PIXEL, 0)
 
         return watershed(-dist_transform, markers, mask=mask, watershed_line=True)
 
-    def __extract_polygons(self, labels: np.ndarray, target_size: tuple) -> list:
-        """Extrae contornos de una máscara de etiquetas y los convierte a Polígonos de Shapely."""
+    def __extract_polygons(self, labels: np.ndarray, target_size: tuple, inference_size: tuple) -> list:
         polygons = []
-        w_target, h_target = target_size
-        scale_factor = np.array([w_target / 1024.0, h_target / 1024.0], dtype=np.float32)
+        w_t, h_t = target_size
+        w_i, h_i = inference_size
+        
+        # Factor de escala: Resolución Original / Resolución de Inferencia
+        scale_factor = np.array([w_t / w_i, h_t / h_i], dtype=np.float32)
 
-        unique_labels = np.unique(labels)
-        for i in unique_labels:
-            if i <= 0: continue # Omitir fondo
+        for i in np.unique(labels):
+            if i <= 0: continue
 
             lbl_mask = (labels == i).astype(np.uint8)
             contours, _ = cv2.findContours(lbl_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -208,22 +167,23 @@ class OnnxPostProcessingNode(PipelineNode):
             for cnt in contours:
                 if len(cnt) < 3: continue
                 
-                # Simplificar contorno y escalar a tamaño original
+                # Simplificación
                 epsilon = 0.002 * cv2.arcLength(cnt, True)
                 cnt_approx = cv2.approxPolyDP(cnt, epsilon, True)
+                
                 if len(cnt_approx) < 3: continue
                 
+                # Escalar puntos a la resolución original
                 points_scaled = cnt_approx.squeeze() * scale_factor
-                if len(points_scaled) < 3: continue
                 
-                # Crear y validar polígono de Shapely
-                poly = Polygon(points_scaled)
-                if not poly.is_valid: poly = poly.buffer(0)
-                
-                if not poly.is_empty:
-                    if poly.geom_type == 'MultiPolygon':
-                        for geom in poly.geoms:
-                            if not geom.is_empty: polygons.append(geom)
-                    else:
-                        polygons.append(poly)
+                try:
+                    poly = Polygon(points_scaled)
+                    if not poly.is_valid: poly = poly.buffer(0)
+                    if not poly.is_empty:
+                        if poly.geom_type == 'MultiPolygon':
+                            polygons.extend([g for g in poly.geoms if not g.is_empty])
+                        else:
+                            polygons.append(poly)
+                except Exception:
+                    continue
         return polygons

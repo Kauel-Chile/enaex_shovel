@@ -1,3 +1,4 @@
+import cv2
 import logging
 from typing import Any, Dict
 
@@ -6,13 +7,13 @@ import numpy as np
 from matplotlib.colors import to_rgba
 from matplotlib.lines import Line2D
 
-from src.nodes.base import PipelineNode
+from .base import PipelineNode
 
 
 class ResultVisualizerNode(PipelineNode):
     """
-    Genera una figura de Matplotlib que visualiza los resultados del análisis,
-    superponiendo los polígonos de las rocas y las máscaras sobre la imagen original.
+    Visualiza los resultados del análisis superponiendo polígonos y máscaras
+    sobre la imagen original completa, adaptándose a tamaños dinámicos.
     """
     def __init__(
         self,
@@ -20,61 +21,34 @@ class ResultVisualizerNode(PipelineNode):
         contour_width: float = 0.8,
         name: str = "visualizer_node"
     ):
-        """
-        Inicializa el nodo de visualización.
-
-        Args:
-            fill_alpha (float): Nivel de transparencia para el relleno de los polígonos.
-            contour_width (float): Ancho de línea para el contorno de los polígonos.
-            name (str): Nombre del nodo.
-        """
         super().__init__(name)
         self.fill_alpha = fill_alpha
         self.contour_width = contour_width
         
-        # Define la paleta de colores para las categorías de tamaño.
         self.COLORS = {
             "P00-P20": (12/255, 143/255, 250/255),  # Azul
             "P20-P40": (12/255, 250/255, 96/255),   # Verde
             "P40-P60": (0/255, 250/255, 230/255),   # Cian
             "P60-P80": (250/255, 162/255, 25/255),  # Naranja
             "P80-P100": (250/255, 33/255, 25/255),  # Rojo
-            "FINE": (0.792, 0, 1)                   # Violeta
+            "FINE": (0.792, 0, 1)                    # Violeta
         }
 
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Crea una figura de Matplotlib con los resultados del análisis.
-        """
         logging.info("[%s] Iniciando generación de la visualización...", self.name)
         
-        # Intentamos obtener la imagen original si existe; de lo contrario, usamos 'image'
+        # Obtenemos la imagen original (la de resolución completa)
         img = context.get('original_image', context.get('image'))
         rocks = context.get('rocks', [])
-        mask_bg = context.get('mask_bg')
+        mask_bg = context.get('mask_bg') # Esta máscara ya fue reescalada en el nodo anterior
         granulometry_result = context.get('granulometry_result')
 
         if img is None:
             raise ValueError(f"[{self.name}] No se encontró 'image' en el contexto.")
         
         h_orig, w_orig = img.shape[:2]
-
-        # --- INICIO HOT FIX 2160 CENTER CUT ---
-        target_size = 2160
         
-        # Calculamos el offset de forma independiente asegurando que no sea negativo.
-        offset_x = max(0, (w_orig - target_size) // 2)
-        offset_y = max(0, (h_orig - target_size) // 2)
-        
-        # Recortamos la imagen al cuadrado central
-        img = img[offset_y:offset_y+target_size, offset_x:offset_x+target_size]
-        h, w = img.shape[:2] # Actualizamos a las dimensiones de la imagen recortada
-        
-        logging.info("[%s] Hotfix: Imagen recortada a %dx%d (offset original X=%d, Y=%d)", 
-                     self.name, w, h, offset_x, offset_y)
-        # --- FIN HOT FIX ---
-
-        # Prioriza los P-values del modelo ajustado; si no existen, usa los de la curva real.
+        # Determinamos los umbrales de tamaño (P-values)
         p_vals = {}
         if granulometry_result:
             if granulometry_result.modeled_curve:
@@ -87,27 +61,26 @@ class ResultVisualizerNode(PipelineNode):
         p60 = p_vals.get("P60", 0)
         p80 = p_vals.get("P80", 0)
 
-        # Creación de la figura y ejes
-        fig, ax = plt.subplots(figsize=(8, 6))
+        # Configuración de la figura
+        # Para imágenes muy grandes, Matplotlib puede sufrir; ajustamos el DPI.
+        fig, ax = plt.subplots(figsize=(12, 9), dpi=100)
         ax.imshow(img)
 
-        # Dibuja la máscara de material fino.
+        # 1. Dibujar máscara de material fino/fondo
         if mask_bg is not None:
-            # Ahora la imagen base (img) ya está recortada, y mask_bg coincide con este recorte
-            mask_rgba = np.zeros((h, w, 4))
-            h_crop, w_crop = mask_bg.shape[:2]
+            # Creamos una capa RGBA del tamaño de la imagen original
+            mask_rgba = np.zeros((h_orig, w_orig, 4))
             
-            # Por seguridad (en caso de pequeñas variaciones), tomamos los mínimos
-            h_crop = min(h, h_crop)
-            w_crop = min(w, w_crop)
+            # Aseguramos que la máscara coincida con el tamaño (por si hubo redondeos)
+            if mask_bg.shape[:2] != (h_orig, w_orig):
+                mask_bg = cv2.resize(mask_bg, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST)
             
-            # Aplicamos el color sobre la máscara binaria
-            mask_rgba[:h_crop, :w_crop][mask_bg[:h_crop, :w_crop] > 0] = to_rgba(self.COLORS["FINE"], alpha=self.fill_alpha)
-            
+            mask_rgba[mask_bg > 0] = to_rgba(self.COLORS["FINE"], alpha=self.fill_alpha)
             ax.imshow(mask_rgba)
 
-        # Itera sobre cada roca para dibujarla, coloreada según su tamaño.
+        # 2. Dibujar polígonos de rocas
         for rock in rocks:
+            # Clasificación por color según diámetro
             if rock.diameter <= p20: color_key = "P00-P20"
             elif rock.diameter <= p40: color_key = "P20-P40"
             elif rock.diameter <= p60: color_key = "P40-P60"
@@ -116,16 +89,14 @@ class ResultVisualizerNode(PipelineNode):
             
             base_color = self.COLORS[color_key]
             
-            # Obtenemos las coordenadas de la roca
+            # Obtener coordenadas (ya vienen en escala original desde OnnxPostProcessingNode)
             x_coords, y_coords = rock.contorno.exterior.xy
             
-            # Como la imagen ya está recortada, NO es necesario sumar offset_x y offset_y
-            
-            # Dibuja el relleno y el contorno del polígono de la roca
+            # Relleno y contorno
             ax.fill(x_coords, y_coords, color=to_rgba(base_color, alpha=self.fill_alpha))
             ax.plot(x_coords, y_coords, color=base_color, linewidth=self.contour_width)
 
-        # Configuración de la leyenda y apariencia del gráfico.
+        # 3. Leyenda y Estética
         legend_elements = [
             Line2D([0], [0], marker='o', color='w', label='FINO', markerfacecolor=self.COLORS["FINE"], markersize=10),
             Line2D([0], [0], marker='o', color='w', label='< P20', markerfacecolor=self.COLORS["P00-P20"], markersize=10),
@@ -134,17 +105,22 @@ class ResultVisualizerNode(PipelineNode):
             Line2D([0], [0], marker='o', color='w', label='P60-P80', markerfacecolor=self.COLORS["P60-P80"], markersize=10),
             Line2D([0], [0], marker='o', color='w', label='> P80', markerfacecolor=self.COLORS["P80-P100"], markersize=10)
         ]
-        ax.set_aspect('equal')
-        ax.set_xlim(0, w)
-        ax.set_ylim(h, 0)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.legend(handles=legend_elements, ncol=len(legend_elements), loc='lower center', bbox_to_anchor=(0.5, -0.1), frameon=False)
+        
+        ax.set_xlim(0, w_orig)
+        ax.set_ylim(h_orig, 0) # Invertido para formato imagen
+        ax.axis('off') # Limpiamos ejes para mejor visualización
+        
+        ax.legend(
+            handles=legend_elements, 
+            ncol=3, # En 2 filas para que no sea tan largo
+            loc='upper center', 
+            bbox_to_anchor=(0.5, -0.05), 
+            frameon=False
+        )
         
         plt.tight_layout()
 
-        # Guarda la figura en el contexto
         context['output_figure'] = fig
-        logging.info("[%s] Visualización generada y añadida al contexto.", self.name)
+        logging.info("[%s] Visualización generada a resolución original (%dx%d).", self.name, w_orig, h_orig)
         
         return context
