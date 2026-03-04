@@ -131,7 +131,6 @@ def main():
             # Asumimos que GranulometryModelNode guarda los resultados en 'model_results'
             # o directamente en las llaves del contexto (ajusta según tu implementación)
             stats_data = context.get('granulometry_result', context) 
-            print(stats_data)
             txt_path = OUTPUT_DIR / f"{img_path.stem}_data.txt"
             
             save_granulometry_data(txt_path, stats_data, img_path.name)
