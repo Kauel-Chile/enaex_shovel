@@ -87,8 +87,6 @@ class ServiceBusSenderNode(PipelineNode):
             # El parámetro 'default' se encarga de limpiar los tipos NumPy dentro del dict
             message_body = json.dumps(payload, default=self._json_serializer_helper)
             
-            print(message_body)
-
             # --- 4. Enviar a Azure ---
             client = ServiceBusClient.from_connection_string(self.connection_string)
             with client:
