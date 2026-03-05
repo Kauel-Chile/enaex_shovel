@@ -4,7 +4,7 @@
 ACR="acrfragnexbackend"
 ENAEX_SUBSCRIPTION="Enaex TD"
 IMAGE_NAME="ia_worker"
-IMAGE_TAG="1.0.4"
+IMAGE_TAG="1.0.7"
 
 # 1. Verificar Login de Azure
 echo "Verificando sesión de Azure..."
