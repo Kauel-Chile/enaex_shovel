@@ -176,6 +176,6 @@ pyrightconfig.json
 .env*
 zz_*
 weights/*
-results/
+results*/
 manual_script/images/*
 manual_script/images/*
