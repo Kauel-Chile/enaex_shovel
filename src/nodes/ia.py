@@ -8,17 +8,25 @@ from typing import Any, Dict, List
 
 from .base import PipelineNode
 
-def get_valid_inference_size(shape: tuple, depth: int = 7) -> tuple:
+def get_valid_inference_size(shape: tuple, depth: int = 7, offset: int = 0) -> tuple:
     """
-    Calcula las dimensiones (W, H) más cercanas que son divisibles por 2^depth.
-    Esto es crítico para modelos con arquitectura U-Net o Encoder-Decoder.
+    Calcula dimensiones (W, H) divisibles por 2^depth con un desplazamiento.
+    
+    Args:
+        shape: (H, W) dimensiones originales.
+        depth: Potencia de 2 (ej. 7 -> 128).
+        offset: Cuántos múltiplos retroceder. 
+                0 = El múltiplo inferior más cercano.
+                4 = El 5º múltiplo anterior (el actual + 4 saltos atrás).
     """
     divisor = 2 ** depth
     h, w = shape[:2]
-    new_w = (w // divisor) * divisor
-    new_h = (h // divisor) * divisor
+
+    base_h = (h // divisor) * divisor
+    base_w = (w // divisor) * divisor
     
-    # Aseguramos un tamaño mínimo de un bloque
+    new_h = base_h - (offset * divisor)
+    new_w = base_w - (offset * divisor)
     return max(new_w, divisor), max(new_h, divisor)
 
 
@@ -42,7 +50,7 @@ class OnnxInferenceNode(PipelineNode):
         context['original_shape'] = (orig_w, orig_h)
 
         # 2. Calcular tamaño óptimo (múltiplo de 128)
-        target_w, target_h = get_valid_inference_size(image.shape, depth=7)
+        target_w, target_h = get_valid_inference_size(image.shape, depth=7, offset=4)
         context['inference_shape'] = (target_w, target_h)
 
         logging.info("[%s] Redimensionando de %dx%d a %dx%d para inferencia...", 
